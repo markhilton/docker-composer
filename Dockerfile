@@ -4,16 +4,21 @@ FROM php:7.2-alpine
 MAINTAINER Mark Hilton <nerd305@gmail.com>
 
 # Packages
-RUN apk --update add \
+RUN apk --no-cache --update add \
     autoconf \
     build-base \
     curl \
     git \
+    openssh \
+    mercurial \
+    tini \
+    bash \
+    patch \
     subversion \
     freetype-dev \
     libjpeg-turbo-dev \
-    openssl \
-#    libressl-dev
+#    openssl \
+    libressl-dev \
     libpng-dev \
     libbz2 \
     bzip2-dev \
@@ -33,35 +38,41 @@ RUN docker-php-ext-install bcmath zip bz2 mbstring pcntl xsl && \
 RUN apk del build-base && \
     rm -rf /var/cache/apk/*
 
-# PEAR tmp fix
-RUN echo "@testing http://dl-4.alpinelinux.org/alpine/edge/testing/" >> /etc/apk/repositories && \
-    apk add --update php7-pear@testing && \
-    rm -rf /var/cache/apk/*
+RUN echo "memory_limit=-1" > "$PHP_INI_DIR/conf.d/memory-limit.ini" \
+ && echo "date.timezone=${PHP_TIMEZONE:-UTC}" > "$PHP_INI_DIR/conf.d/date_timezone.ini"
 
-# Memory Limit
-RUN echo "memory_limit=-1" > $PHP_INI_DIR/conf.d/memory-limit.ini
+RUN apk add --no-cache --virtual .build-deps zlib-dev \
+ && docker-php-ext-install zip \
+ && runDeps="$( \
+    scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
+    | tr ',' '\n' \
+    | sort -u \
+    | awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+    )" \
+ && apk add --virtual .composer-phpext-rundeps $runDeps \
+ && apk del .build-deps
 
-# Time Zone
-RUN echo "date.timezone=${PHP_TIMEZONE:-UTC}" > $PHP_INI_DIR/conf.d/date_timezone.ini
-
-# Register the COMPOSER_HOME environment variable
-ENV COMPOSER_HOME /composer
-
-# Add global binary directory to PATH and make sure to re-export it
-ENV PATH /composer/vendor/bin:$PATH
-
-# Allow Composer to be run as root
 ENV COMPOSER_ALLOW_SUPERUSER 1
+ENV COMPOSER_HOME /tmp
+ENV COMPOSER_VERSION 1.6.5
 
-# Setup the Composer installer
-RUN curl -o /tmp/composer-setup.php https://getcomposer.org/installer \
-  && curl -o /tmp/composer-setup.sig https://composer.github.io/installer.sig \
-  && php -r "if (hash('SHA384', file_get_contents('/tmp/composer-setup.php')) !== trim(file_get_contents('/tmp/composer-setup.sig'))) { unlink('/tmp/composer-setup.php'); echo 'Invalid installer' . PHP_EOL; exit(1); }"
+RUN curl -s -f -L -o /tmp/installer.php https://raw.githubusercontent.com/composer/getcomposer.org/b107d959a5924af895807021fcef4ffec5a76aa9/web/installer \
+ && php -r " \
+    \$signature = '544e09ee996cdf60ece3804abc52599c22b1f40f4323403c44d44fdfdd586475ca9813a858088ffbc1f233e9b180f061'; \
+    \$hash = hash('SHA384', file_get_contents('/tmp/installer.php')); \
+    if (!hash_equals(\$signature, \$hash)) { \
+        unlink('/tmp/installer.php'); \
+        echo 'Integrity check failed, installer is either corrupt or worse.' . PHP_EOL; \
+        exit(1); \
+    }" \
+ && php /tmp/installer.php --no-ansi --install-dir=/usr/bin --filename=composer --version=${COMPOSER_VERSION} \
+ && composer --ansi --version --no-interaction \
+ && rm -rf /tmp/* /tmp/.htaccess
 
-# Set up the volumes and working directory
-VOLUME ["/app"]
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
 WORKDIR /app
 
-# Set up the command arguments
-CMD ["-"]
-ENTRYPOINT ["composer", "--ansi"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+CMD ["composer"]
