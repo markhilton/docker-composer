@@ -2,6 +2,7 @@
 
 # inject oAuth token if provided
 if [ ! -z ${TOKEN+x} ] && [ "$TOKEN" != "" ]; then
+    echo "ENV TOKEN: applied to /tmp/auth.json"
     echo "{\"github-oauth\": {\"github.com\": \"$TOKEN\"}}" > /tmp/auth.json
 fi
 
